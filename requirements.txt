@@ -1,0 +1,12 @@
+pandas
+numpy
+scikit-learn
+imbalanced-learn
+joblib
+lizard
+radon
+google-genai
+python-dotenv
+streamlit
+plotly
+pytest

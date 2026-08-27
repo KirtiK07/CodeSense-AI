@@ -71,27 +71,37 @@ Held-out test split, 2,177 real JM1 modules:
 ## Project Structure
 
 ```
-codesense-ai/
+CodeSense-AI/
 ├── training/           # Dataset preprocessing + model training
 ├── analysis/           # Multi-language static metric extraction
 ├── ai_review/          # Gemini-based independent code review
 ├── app/                # Streamlit dashboard
-├── tests/              # Pytest regression suite (13 tests)
-└── test_samples/       # Sample files across languages/risk levels
+├── models/             # Trained model artifact (defect_model.pkl, committed)
+└── tests/              # Pytest regression suite (13 tests)
 ```
 
 ## Setup & Run
 
 ```bash
-git clone https://github.com/<your-username>/codesense-ai.git
-cd codesense-ai
-chmod +x run.sh
-./run.sh
+git clone https://github.com/KirtiK07/CodeSense-AI.git
+cd CodeSense-AI
+
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+pip install -r requirements.txt
+cp .env.example .env   # then set a real GEMINI_API_KEY, see below
+
+pytest tests/test_pipeline.py -v   # 13/13
+streamlit run app/dashboard.py
 ```
 
-`run.sh` handles virtual environment setup, dependency installation, model training (if `models/defect_model.pkl` doesn't already exist), running the test suite, and launching the app — in that order.
+`models/defect_model.pkl` is already committed and trained, so no training step is needed just
+to run the app — see `training/train_model.py` if you want to retrain it yourself from the raw
+JM1 dataset.
 
-**Before running:** copy `.env.example` to `.env` and set a real `GEMINI_API_KEY` (get one at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)). Without it, the ML risk scoring still works; only the AI review panel will show an error.
+**`GEMINI_API_KEY`** — get one free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+Without it, the ML risk scoring still works; only the AI review panel will show an error.
 
 ## Testing
 
@@ -99,7 +109,22 @@ chmod +x run.sh
 pytest tests/test_pipeline.py -v
 ```
 
-13 tests covering language detection, static analysis edge cases (syntax errors, empty files, missing files), and LLM response parsing (including malformed JSON recovery).
+13 tests covering language detection, static analysis edge cases (syntax errors, empty files, missing files), and LLM response parsing (including malformed JSON recovery). All 13 pass with only `requirements.txt` installed — no API key or trained model needed for the test suite itself.
+
+## What I'd do with more time
+
+- **Recall on the defective class (0.380) is the weakest number in the table** — worth stating
+  plainly rather than only foregrounding accuracy/ROC-AUC. A risk tool that misses more than
+  half of actually-defective modules at the default threshold has a real cost; tuning the
+  `predict_proba()` cutoff for the risk bands specifically to favor recall (accepting more
+  false positives) would be the first thing to try, benchmarked against the current cutoff
+  rather than assumed to be better.
+- **Non-Python languages only get 4/21 real features**, the rest filled from training-set
+  medians (disclosed in-app, not hidden — see "Making it work across languages" above). A
+  language-specific Halstead/McCabe extractor for at least Java (the next most common
+  language after Python in most polyglot codebases) would close a real coverage gap rather
+  than estimate around it.
+- **No CI** — the 13-test suite runs locally on demand, not automatically on push.
 
 ## Live Demo
 

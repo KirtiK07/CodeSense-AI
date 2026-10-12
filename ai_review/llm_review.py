@@ -1,14 +1,25 @@
-
 import os
 import json
 import re
+import time
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL_NAME = "gemini-3.6-flash"  # current GA workhorse model, strong on code tasks
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")  # main model, strong on code tasks
+
+# Tried in order if the main model is overloaded (503/429) or not found (404).
+# Override in .env with GEMINI_FALLBACK_MODELS=model-a,model-b
+FALLBACK_MODELS = [
+    m.strip() for m in os.getenv(
+        "GEMINI_FALLBACK_MODELS", "gemini-flash-latest,gemini-flash-lite-latest"
+    ).split(",") if m.strip()
+]
+RETRIES_PER_MODEL = 3
+_TRANSIENT_MARKERS = ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "500", "INTERNAL", "overloaded", "high demand")
+_NOT_FOUND_MARKERS = ("404", "NOT_FOUND")
 
 _client = None
 
@@ -54,6 +65,35 @@ Code:
 """
 
 
+def _generate_with_retry(client, prompt: str, sleep=time.sleep):
+    """
+    Calls Gemini, retrying briefly when Google reports the model is busy
+    (503/429/500), then falling back to the next model in the list. A model
+    that doesn't exist (404) is skipped straight away. Any other error
+    (e.g. an invalid API key) is raised immediately - retrying won't help.
+    """
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        temperature=0.2,  # lower temperature: consistent, less "creative" reviews
+    )
+    last_error = None
+    for model in [MODEL_NAME] + [m for m in FALLBACK_MODELS if m != MODEL_NAME]:
+        for attempt in range(RETRIES_PER_MODEL):
+            try:
+                return client.models.generate_content(model=model, contents=prompt, config=config)
+            except Exception as e:
+                last_error = e
+                msg = str(e)
+                if any(k in msg for k in _NOT_FOUND_MARKERS):
+                    break                      # this model doesn't exist -> next model
+                if any(k in msg for k in _TRANSIENT_MARKERS):
+                    if attempt < RETRIES_PER_MODEL - 1:
+                        sleep(2 ** attempt)    # 1s, 2s backoff
+                    continue
+                raise                          # auth/quota/other: don't retry
+    raise last_error
+
+
 def _strip_code_fences(text: str) -> str:
     """Fallback cleanup in case the model wraps JSON in ```json ... ``` anyway."""
     text = text.strip()
@@ -84,14 +124,7 @@ def get_review(code: str, language: str, risk_level: str,
 
     try:
         client = _get_client()
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.2,  # lower temperature: consistent, less "creative" reviews
-            ),
-        )
+        response = _generate_with_retry(client, prompt)
         raw_text = _strip_code_fences(response.text)
         # strict=False tolerates literal newlines inside string values, which
         # Gemini sometimes emits when a JSON field (e.g. refactored_code)
